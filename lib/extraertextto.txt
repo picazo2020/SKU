@@ -1,0 +1,68 @@
+import { PDFDocument } from "pdf-lib";
+import PdfParser from "pdf2json";
+
+export async function sortPdfPairsBySku(buffers) {
+  try {
+    // Tomamos el primer archivo del lote para auditarlo
+    const firstBuffer = buffers[0]?.buffer || buffers[0];
+    
+    if (!firstBuffer) {
+      throw new Error("No se detectó ningún buffer válido para auditar.");
+    }
+
+    // Ejecutamos un parseador limpio exclusivo para la auditoría de la terminal
+    const rawTextPage2 = await new Promise((resolve, reject) => {
+      const pdfParser = new PdfParser();
+      pdfParser.on("pdfParser_dataReady", (pdfData) => {
+        // Buscamos explícitamente la Página 2 (Índice 1)
+        const page2 = pdfData.Pages[1];
+        if (!page2 || !page2.Texts) {
+          resolve("ALERTA: No se encontró la Página 2 o no tiene textos legibles.");
+          return;
+        }
+
+        // Extraemos el texto de forma plana barriendo cualquier estructura de t.R
+        const extractedWords = page2.Texts.map(t => {
+          if (t.R) {
+            if (Array.isArray(t.R) && t.R[0] && t.R[0].T) {
+              return decodeURIComponent(t.R[0].T);
+            } else if (t.R.T) {
+              return decodeURIComponent(t.R.T);
+            } else if (t.R[0] && t.R[0].T) {
+              return decodeURIComponent(t.R[0].T);
+            }
+          }
+          return "";
+        });
+
+        // Retornamos dos versiones: una pegada y una con espacios para ver la diferencia
+        resolve({
+          pegado: extractedWords.join(""),
+          conEspacios: extractedWords.join(" ")
+        });
+      });
+      pdfParser.on("pdfParser_dataError", (err) => reject(err));
+      pdfParser.parseBuffer(firstBuffer);
+    });
+
+    // =========================================================================
+    // 🔍 BANNER DE IMPRESIÓN FORZADA EN TERMINAL
+    // =========================================================================
+    console.log("\n╔═══════════════════════════════════════════════════════════════╗");
+    console.log("  📥 TEXTO EN BRUTO EXTRACTADO DE LA PÁGINA 2 (PACKING LIST)    ");
+    console.log("╚═══════════════════════════════════════════════════════════════╝\n");
+    console.log("--- OPCIÓN A (PEGADO SIN ESPACIOS) ---");
+    console.log(rawTextPage2.pegado || rawTextPage2);
+    console.log("\n--- OPCIÓN B (SEPARADO CON ESPACIOS) ---");
+    console.log(rawTextPage2.conEspacios || "");
+    console.log("\n╚═══════════════════════════════════════════════════════════════╝\n");
+
+    // Forzamos el cierre controlado para leer los datos con calma
+    throw new Error("Auditoría de Página 2 completada con éxito. Revisa tu consola.");
+    // =========================================================================
+
+  } catch (error) {
+    console.error("Error crítico en ordenamiento:", error.message);
+    throw error;
+  }
+}

@@ -1,0 +1,92 @@
+import { PDFDocument } from "pdf-lib";
+import PdfParser from "pdf2json";
+
+const getPdfText = (buffer) => {
+  return new Promise((resolve, reject) => {
+    const pdfParser = new PdfParser();
+    pdfParser.on("pdfParser_dataReady", (pdfData) => {
+      const pages = pdfData.Pages.map(page => {
+        return page.Texts.map(t => {
+          if (t.R) {
+            // 🎯 EXTRACCIÓN DINÁMICA: Atrapa el texto venga en la estructura que venga (objeto o arreglo)
+            let rawText = "";
+            if (Array.isArray(t.R) && t.R[0] && t.R[0].T) {
+              rawText = t.R[0].T;
+            } else if (t.R.T) {
+              rawText = t.R.T;
+            } else if (t.R[0] && t.R[0].T) {
+              rawText = t.R[0].T;
+            }
+
+            if (rawText) {
+              try {
+                return decodeURIComponent(rawText);
+              } catch (error) {
+                return rawText;
+              }
+            }
+          }
+          return "";
+        }).join(""); // Tu lógica original ganadora sin espacios
+      });
+      resolve(pages);
+    });
+    pdfParser.on("pdfParser_dataError", (err) => reject(err));
+    pdfParser.parseBuffer(buffer);
+  });
+};
+
+export async function sortPdfPairsBySku(buffers) {
+  try {
+    const finalPdf = await PDFDocument.create();
+    const allPairsGlobal = [];
+    
+    // 🎯 TU EXPRESIÓN REGULAR AMPLIADA: Busca 4 números obligatorios seguidos de un guion opcional y las letras TTR, TRR o TMD
+    const skuRegex = /(\d{4})[-]*(?:TTR|TRR|TMD)/i;
+
+    // Iteramos sobre todos los archivos PDF seleccionados
+    for (let b = 0; b < buffers.length; b++) {
+      const buffer = buffers[b];
+      const allPagesText = await getPdfText(buffer);
+      const originalPdf = await PDFDocument.load(buffer);
+      const totalPages = originalPdf.getPageCount();
+
+      // Extraemos las hojas y el SKU de cada pedido de forma nativa
+      for (let i = 0; i < totalPages; i += 2) {
+        const p1 = i;
+        const p2 = i + 1;
+        
+        const textToSearch = allPagesText[p2] || "";
+        const match = textToSearch.match(skuRegex);
+        
+        // Mantiene tu captura exacta original del Grupo 1 (los 4 números detectados)
+        const skuPrefix = (match && match[1]) ? match[1] : "9999";
+
+        console.log(`Pedido ${Math.floor(i/2) + 1}: SKU -> ${skuPrefix}`);
+
+        // Clonamos el par de páginas de este archivo individual
+        const valid = [p1, p2].filter(idx => idx < totalPages);
+        const copiedPages = await finalPdf.copyPages(originalPdf, valid);
+
+        allPairsGlobal.push({
+          sku: skuPrefix,
+          pages: copiedPages
+        });
+      }
+    }
+
+    // Ordenamos la lista combinada global numéricamente de menor a mayor
+    allPairsGlobal.sort((a, b) => parseInt(a.sku) - parseInt(b.sku));
+
+    // Añadimos las páginas ordenadas al documento consolidado final
+    for (const pair of allPairsGlobal) {
+      pair.pages.forEach(page => finalPdf.addPage(page));
+    }
+
+    console.log(`\n✨ Proceso completado: Se mezclaron y ordenaron ${allPairsGlobal.length} pedidos totales.`);
+    return await finalPdf.save();
+  } catch (error) {
+    console.error("Error crítico en ordenamiento múltiple:", error);
+    throw error;
+  }
+}

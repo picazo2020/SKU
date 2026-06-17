@@ -1,0 +1,93 @@
+import { PDFDocument } from "pdf-lib";
+import PdfParser from "pdf2json";
+
+const getPdfText = (buffer) => {
+  return new Promise((resolve, reject) => {
+    const pdfParser = new PdfParser();
+    pdfParser.on("pdfParser_dataReady", (pdfData) => {
+      const pages = pdfData.Pages.map(page => {
+        // LÓGICA ORIGINAL QUE SÍ FUNCIONA: Une todo sin espacios para evitar rupturas
+        return page.Texts.map(t => {
+          if (t.R && t.R[0] && t.R[0].T) {
+            return decodeURIComponent(t.R[0].T);
+          }
+          return "";
+        }).join(""); 
+      });
+      resolve(pages);
+    });
+    pdfParser.on("pdfParser_dataError", (err) => reject(err));
+    pdfParser.parseBuffer(buffer);
+  });
+};
+
+// NUEVA FUNCIÓN: Limpia a fondo el texto compactado eliminando residuos de codificación PDF
+function normalizeText(text) {
+  return text
+    .toLowerCase()
+    .normalize("NFD") // Separa los acentos de las letras (ej: á -> a + ´)
+    .replace(/[\u0300-\u036f]/g, "") // Elimina los acentos por completo
+    .replace(/[^a-z0-9]/g, ""); // Borra CUALQUIER símbolo extraño, espacios ocultos o %C3
+}
+
+export async function sortPdfPairsBySku(buffer) {
+  try {
+    const allPagesText = await getPdfText(buffer);
+    const originalPdf = await PDFDocument.load(buffer);
+    const totalPages = originalPdf.getPageCount();
+    const pairs = [];
+
+    // Buscador exacto de 4 números seguidos de la palabra TRR
+    const skuRegex = /(\d{4})[-]*TRR/i;
+
+    // --- PASO 1: VALIDACIÓN PREVIA DE TIENDA Y DIRECCIÓN LIMPIAS ---
+    for (let i = 0; i < totalPages; i += 2) {
+      const p1 = i;
+      
+      // Aplicamos la limpieza profunda al texto de la primera página
+      const cleanTextPage1 = normalizeText(allPagesText[p1] || "");
+
+      // Evaluamos las palabras clave de forma 100% plana y segura
+      const tieneTienda = cleanTextPage1.includes("lagommx");
+      const tieneDireccion = cleanTextPage1.includes("tenayuca");
+
+      if (!tieneTienda || !tieneDireccion) {
+        throw new Error(`Tienda errónea o almacén inválido detectado en el Pedido ${Math.floor(i / 2) + 1}.`);
+      }
+    }
+
+    // --- PASO 2: ORDENAMIENTO POR SKU ---
+    for (let i = 0; i < totalPages; i += 2) {
+      const p1 = i;
+      const p2 = i + 1;
+      
+      const textToSearch = allPagesText[p2] || "";
+      const match = textToSearch.match(skuRegex);
+      
+      // Si encuentra el match, tomamos los 4 dígitos (grupo 1)
+      const skuPrefix = (match && match[1]) ? match[1] : "9999";
+
+      console.log(`Pedido ${Math.floor(i/2) + 1}: SKU -> ${skuPrefix}`);
+
+      pairs.push({
+        sku: skuPrefix,
+        indices: [p1, p2]
+      });
+    }
+
+    // Ordenar numéricamente (Ej: 1890, 2088, 5202...)
+    pairs.sort((a, b) => parseInt(a.sku) - parseInt(b.sku));
+
+    const finalPdf = await PDFDocument.create();
+    for (const pair of pairs) {
+      const valid = pair.indices.filter(idx => idx < totalPages);
+      const copiedPages = await finalPdf.copyPages(originalPdf, valid);
+      copiedPages.forEach(p => finalPdf.addPage(p));
+    }
+
+    return await finalPdf.save();
+  } catch (error) {
+    console.error("Error crítico en ordenamiento:", error.message);
+    throw error;
+  }
+}

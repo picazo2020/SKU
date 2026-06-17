@@ -1,0 +1,1 @@
+module.exports = { apps: [{ name: "jt-sku-dashboard", script: "./node_modules/next/dist/bin/next", args: "dev --webpack", node_args: "--max-old-space-size=8192", env: { NODE_ENV: "development" }, autorestart: true, watch: false }] };

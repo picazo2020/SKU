@@ -1,6 +1,14 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  /* config options here */
+  turbopack: {}, // <-- Agrega esta línea aquí
+  webpack: (config) => {
+    config.resolve.fallback = {
+      fs: false,
+      path: false,
+      child_process: false,
+    };
+    return config;
+  },
 };
 
 export default nextConfig;
